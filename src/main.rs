@@ -286,7 +286,7 @@ impl TimeData {
                     continue;
                 }
 
-                println!("Parsing line: {}", line);
+                // println!("Parsing line: {}", line);
 
                 let entry_id = format!("{}-{}",
                     path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown"),
@@ -388,9 +388,27 @@ impl TimeData {
 fn display_grouped_entries(grouped_entries: &[GroupedEntry]) {
     for (idx, group) in grouped_entries.iter().enumerate() {
         println!("\nGroup {}", idx + 1);
-        println!("Tags: {:?}", group.tags);
-        println!("Duration by date:");
 
+        // Extract description and project from tags if available
+        let (description, project) = group.tags.iter().fold((None, None), |(desc, proj), tag| {
+            if tag.starts_with("description:") {
+                (Some(tag.trim_start_matches("description:")), proj)
+            } else if tag.starts_with("project:") {
+                (desc, Some(tag.trim_start_matches("project:")))
+            } else {
+                (desc, proj)
+            }
+        });
+
+        // Display tags based on available information
+        match (description, project) {
+            (Some(desc), Some(proj)) => println!("Description: {} (Project: {})", desc.trim(), proj.trim()),
+            (Some(desc), None) => println!("Description: {}", desc.trim()),
+            (None, Some(proj)) => println!("Project: {}", proj.trim()),
+            (None, None) => println!("Tags: {:?}", group.tags),
+        }
+
+        println!("Duration by date:");
         for (date, duration) in &group.total_duration {
             println!("  {} - {} hours {} minutes",
                 date,
@@ -428,10 +446,30 @@ fn select_multiple_groups(grouped_entries: &[GroupedEntry]) -> Result<Vec<&Group
     let options: Vec<String> = grouped_entries.iter().enumerate()
         .map(|(idx, group)| {
             let total_hours: f64 = group.total_duration.values().sum::<i64>() as f64 / 60.0;
+
+            // Extract description and project from tags
+            let (description, project) = group.tags.iter().fold((None, None), |(desc, proj), tag| {
+                if tag.starts_with("description:") {
+                    (Some(tag.trim_start_matches("description:")), proj)
+                } else if tag.starts_with("project:") {
+                    (desc, Some(tag.trim_start_matches("project:")))
+                } else {
+                    (desc, proj)
+                }
+            });
+
+            // Format display string based on available information
+            let display_info = match (description, project) {
+                (Some(desc), Some(proj)) => format!("{} (Project: {})", desc.trim(), proj.trim()),
+                (Some(desc), None) => desc.trim().to_string(),
+                (None, Some(proj)) => format!("Project: {}", proj.trim()),
+                (None, None) => format!("Tags: {:?}", group.tags),
+            };
+
             format!(
-                "Group {} - Tags: {:?} - Total: {:.2}h {}",
+                "Group {} - {} - Total: {:.2}h {}",
                 idx + 1,
-                group.tags,
+                display_info,
                 total_hours,
                 if group.all_submitted { "[Submitted]" } else { "" }
             )
@@ -623,30 +661,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_default(true)
             .prompt()?;
 
-        if confirm_submit {
-            for assignment in &assignments {
-                println!("\nPreparing to submit entries for project: {} (Task: {})",
-                    assignment.celoxis_project.name,
-                    assignment.celoxis_task.name);
+if confirm_submit {
+    let mut all_entries = Vec::new();
 
-                let celoxis_entries = assignment.to_celoxis_entries();
+    // Collect all entries first
+    for assignment in &assignments {
+        println!("\nPreparing entries for project: {} (Task: {})",
+            assignment.celoxis_project.name,
+            assignment.celoxis_task.name);
 
-                println!("Entries to submit:");
-                for entry in &celoxis_entries {
-                    println!("  {} - {} hours - {}",
-                        entry.date,
-                        entry.hours,
-                        entry.comments);
-                }
-
-                match celoxis.api.submit_time_entries(celoxis_entries) {
-                    Ok(_) => println!("Successfully submitted entries"),
-                    Err(e) => println!("Error submitting entries: {}", e),
-                }
-            }
-        } else {
-            println!("Submission cancelled.");
+        let celoxis_entries = assignment.to_celoxis_entries();
+        for entry in &celoxis_entries {
+            println!("  {} - {:.2} hours - {}",
+                entry.date,
+                entry.hours,
+                entry.comments);
         }
+        all_entries.extend(celoxis_entries);
+    }
+
+    println!("\nSubmitting {} total time entries...", all_entries.len());
+    match celoxis.api.submit_time_entries(all_entries) {
+        Ok(_) => println!("Successfully submitted all entries"),
+        Err(e) => println!("Error submitting entries: {}", e),
+    }
+} else {
+    println!("Submission cancelled.");
+}
     }
 
     Ok(())
@@ -657,7 +698,7 @@ impl TaskAssignment {
         let mut celoxis_entries = Vec::new();
 
         for (date, duration) in &self.total_duration {
-            let hours = *duration as f64 / 60.0;
+            let hours = ((*duration as f64 / 60.0) * 100.0).round() / 100.0;  // Round to 2 decimal places
 
             celoxis_entries.push(CeloxisTimeEntry {
                 date: date.format("%Y-%m-%d").to_string(),
