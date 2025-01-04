@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use regex::Regex;
 
 mod celoxis;
 use celoxis::{CeloxisApi, CeloxisProject, CeloxisTask, CeloxisTimeEntry};
@@ -220,11 +221,32 @@ impl CeloxisData {
 }
 
 impl TimeData {
-    fn new() -> Result<Self, Box<dyn Error>> {
+    fn new(date_range: &DateRange) -> Result<Self, Box<dyn Error>> {
         let data_dir = Self::detect_timewarrior_dir()?;
-        let entries = Self::read_time_entries(&data_dir)?;
+        let entries = Self::read_time_entries(&data_dir, date_range)?;
 
         Ok(TimeData { entries, data_dir })
+    }
+    fn is_file_in_date_range(filename: &str, range: &DateRange) -> bool {
+        // Expected format: YYYY-MM.data
+        let re = Regex::new(r"^(\d{4})-(\d{2})\.data$").unwrap();
+
+        if let Some(captures) = re.captures(filename) {
+            if let (Some(year_str), Some(month_str)) = (captures.get(1), captures.get(2)) {
+                if let (Ok(year), Ok(month)) = (year_str.as_str().parse::<i32>(), month_str.as_str().parse::<u32>()) {
+                    let file_date = NaiveDate::from_ymd_opt(year, month, 1).unwrap_or(range.start);
+                    let next_month = if month == 12 {
+                        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+                    } else {
+                        NaiveDate::from_ymd_opt(year, month + 1, 1)
+                    }.unwrap_or(range.end);
+
+                    // Check if the file's month overlaps with our date range
+                    return !(next_month <= range.start || file_date > range.end);
+                }
+            }
+        }
+        false
     }
 
     fn detect_timewarrior_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -257,7 +279,7 @@ impl TimeData {
         }
     }
 
-    fn read_time_entries(data_dir: &Path) -> Result<Vec<TimeEntry>, Box<dyn Error>> {
+    fn read_time_entries(data_dir: &Path, date_range: &DateRange) -> Result<Vec<TimeEntry>, Box<dyn Error>> {
         let data_path = data_dir.join("data");
         println!("Looking for data in: {:?}", data_path);
 
@@ -268,52 +290,63 @@ impl TimeData {
 
         let mut entries = Vec::new();
 
-        for entry in fs::read_dir(&data_path)? {
+        // Filter files based on date range
+        let dir_entries = fs::read_dir(&data_path)?;
+        for entry in dir_entries {
             let entry = entry?;
             let path = entry.path();
 
-            if !path.is_file()
-                || path.extension().and_then(|s| s.to_str()) != Some("data")
-                || matches!(
-                    path.file_name().and_then(|s| s.to_str()),
-                    Some("tags.data") | Some("undo.data") | Some("backlog.data")
-                )
-            {
+            // Skip if not a file or not a .data file
+            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("data") {
                 continue;
             }
 
-            println!("Reading file: {:?}", path);
-            let content = fs::read_to_string(&path)?;
-
-            for (line_num, line) in content.lines().enumerate() {
-                if line.trim().is_empty() {
+            // Skip special files
+            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                if filename == "tags.data" || filename == "undo.data" || filename == "backlog.data" {
                     continue;
                 }
 
-                // println!("Parsing line: {}", line);
+                // Check if file is within date range before processing
+                if !Self::is_file_in_date_range(filename, date_range) {
+                    println!("Skipping file outside date range: {}", filename);
+                    continue;
+                }
 
-                let entry_id = format!(
-                    "{}-{}",
-                    path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("unknown"),
-                    line_num
-                );
+                println!("Processing file in range: {}", filename);
+                let content = fs::read_to_string(&path)?;
 
-                match TimeEntry::from_timewarrior(line, entry_id) {
-                    Ok(entry) => {
-                        entries.push(entry);
+                for (line_num, line) in content.lines().enumerate() {
+                    if line.trim().is_empty() {
+                        continue;
                     }
-                    Err(e) => {
-                        println!("Error parsing line {}: {}", line_num + 1, e);
-                        println!("Problematic line content: {}", line);
+
+                    let entry_id = format!(
+                        "{}-{}",
+                        path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown"),
+                        line_num
+                    );
+
+                    match TimeEntry::from_timewarrior(line, entry_id.clone()) {
+                        Ok(entry) => {
+                            // Additional date range check for individual entries
+                            let entry_date = Self::to_local_date(entry.start);
+                            if entry_date >= date_range.start && entry_date <= date_range.end {
+                                entries.push(entry);
+                            }
+                        }
+                        Err(e) => {
+                            println!("Error parsing line {} in {}: {}", line_num + 1, filename, e);
+                        }
                     }
                 }
             }
         }
 
         entries.sort_by(|a, b| a.start.cmp(&b.start));
-        println!("Found {} entries", entries.len());
+        println!("Found {} entries within date range", entries.len());
 
         Ok(entries)
     }
@@ -567,16 +600,17 @@ impl TimeData {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let time_data = TimeData::new()?;
-    println!("Found {} time entries", time_data.entries.len());
+    // First select date range
+    let date_range = TimeData::prompt_date_range()?;
+
+    // Create TimeData with date range
+    let time_data = TimeData::new(&date_range)?;
+    println!("Found {} time entries in selected date range", time_data.entries.len());
 
     let mut celoxis = CeloxisData::new()?;
 
     // Get user preferences once at start
     let user_prefs = celoxis.api.ensure_user_prefs()?;
-
-    // First select date range
-    let date_range = TimeData::prompt_date_range()?;
 
     // Filter entries by date range
     let filtered_entries = time_data.filter_by_date_range(&date_range);
