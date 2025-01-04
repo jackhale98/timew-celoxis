@@ -12,6 +12,12 @@ use inquire::{self, validator::Validation};
 const BASE_URL: &str = "https://app.celoxis.com/psa/api/v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreferences {
+    pub username: String,
+    pub time_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CeloxisProject {
     pub id: String,
     pub name: String,
@@ -23,7 +29,18 @@ pub struct CeloxisProject {
 pub struct CeloxisTask {
     pub id: String,
     pub name: String,
-    // Remove unnecessary fields, we only need id and name
+}
+
+#[derive(Debug, Serialize)]
+pub struct CeloxisTimeEntry {
+    pub date: String,
+    pub hours: f64,
+    #[serde(rename = "timeCode")]
+    pub time_code: String,
+    pub user: String,
+    pub task: String,
+    pub state: i32,
+    pub comments: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +54,7 @@ pub struct CacheData {
     projects: HashMap<String, CeloxisProject>,
     tasks: HashMap<String, Vec<CeloxisTask>>,
     last_updated: DateTime<Utc>,
+    user_prefs: Option<UserPreferences>,
 }
 
 pub struct CeloxisApi {
@@ -65,6 +83,49 @@ impl CeloxisApi {
         Ok(())
     }
 
+    pub fn ensure_user_prefs(&mut self) -> Result<UserPreferences, Box<dyn Error>> {
+        if let Some(cache) = &self.cache {
+            if let Some(prefs) = &cache.user_prefs {
+                return Ok(prefs.clone());
+            }
+        }
+
+        println!("User preferences not found. Please enter your information:");
+
+        let username = inquire::Text::new("Celoxis Username:")
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Invalid("Username cannot be empty".into()))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()?;
+
+        let time_code = inquire::Text::new("Default Time Code (e.g., engineering_labor):")
+            .with_validator(|input: &str| {
+                if input.trim().is_empty() {
+                    Ok(Validation::Invalid("Time code cannot be empty".into()))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()?;
+
+        let prefs = UserPreferences {
+            username,
+            time_code,
+        };
+
+        // Update cache with new preferences
+        if let Some(cache) = &mut self.cache {
+            cache.user_prefs = Some(prefs.clone());
+            self.save_cache()?;
+        }
+
+        Ok(prefs)
+    }
+
     fn ensure_directories_exist(cache_path: &Path) -> Result<(), Box<dyn Error>> {
         if let Some(parent) = cache_path.parent() {
             fs::create_dir_all(parent)?;
@@ -73,7 +134,6 @@ impl CeloxisApi {
     }
 
     pub fn new() -> Result<Self, Box<dyn Error>> {
-        // Ensure API key exists or prompt for it
         Self::ensure_api_key_exists()?;
 
         let api_key = fs::read_to_string("key.txt")?;
@@ -91,7 +151,6 @@ impl CeloxisApi {
             .default_headers(headers)
             .build()?;
 
-        // Use TimeWarrior's data directory for cache
         let cache_path = if let Some(base_dirs) = BaseDirs::new() {
             if Path::new(&format!("{}/.local/share/timewarrior", env!("HOME"))).exists() {
                 PathBuf::from(format!("{}/.local/share/timewarrior/celoxis_cache.json", env!("HOME")))
@@ -104,7 +163,6 @@ impl CeloxisApi {
             PathBuf::from("celoxis_cache.json")
         };
 
-        // Ensure cache directory exists
         Self::ensure_directories_exist(&cache_path)?;
 
         let mut api = Self {
@@ -126,6 +184,7 @@ impl CeloxisApi {
                 projects: HashMap::new(),
                 tasks: HashMap::new(),
                 last_updated: Utc::now(),
+                user_prefs: None,
             });
         }
         Ok(())
@@ -182,7 +241,7 @@ impl CeloxisApi {
         }
 
         let filter_json = format!("{{\"project.id\":\"{}\"}}", project_id);
-        println!("Fetching tasks with filter: {}", filter_json); // Debug print
+        println!("Fetching tasks with filter: {}", filter_json);
 
         let params = [("filter", filter_json)];
         let response: CeloxisResponse<CeloxisTask> = self.client
@@ -206,5 +265,21 @@ impl CeloxisApi {
 
     pub fn get_cached_tasks(&self, project_id: &str) -> Option<&Vec<CeloxisTask>> {
         self.cache.as_ref()?.tasks.get(project_id)
+    }
+
+    pub fn submit_time_entries(&self, entries: Vec<CeloxisTimeEntry>) -> Result<(), Box<dyn Error>> {
+        let url = format!("{}/timeEntries", BASE_URL);
+
+        let response = self.client
+            .post(&url)
+            .json(&entries)
+            .send()?;
+
+        if !response.status().is_success() {
+            let error_json = response.json::<serde_json::Value>()?;
+            return Err(format!("Failed to submit time entries: {:?}", error_json).into());
+        }
+
+        Ok(())
     }
 }
