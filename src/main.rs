@@ -422,7 +422,7 @@ impl TimeData {
                 (None, None) => println!("Tags: {:?}", group.tags),
             }
 
-            println!("Duration by date:");
+            // println!("Duration by date:");
             for (date, duration) in &group.total_duration {
                 println!(
                     "  {} - {} hours {} minutes",
@@ -432,36 +432,36 @@ impl TimeData {
                 );
             }
 
-            println!(
-                "Submission Status: {}",
-                if group.all_submitted {
-                    "All Submitted"
-                } else {
-                    "Not Fully Submitted"
-                }
-            );
+            // println!(
+            //     "Submission Status: {}",
+            //     if group.all_submitted {
+            //         "All Submitted"
+            //     } else {
+            //         "Not Fully Submitted"
+            //     }
+            // );
 
-            println!("Individual Entries by Date:");
-            for (date, entries) in &group.entries {
-                println!("  Date: {}", date);
-                for entry in entries {
-                    let duration = entry.end.map_or_else(
-                        || "Ongoing".to_string(),
-                        |end| format!("{} minutes", (end - entry.start).num_minutes()),
-                    );
-                    let local_time = entry.start.with_timezone(&Local);
-                    println!(
-                        "    - {} ({}) [{}]",
-                        local_time.format("%H:%M"),
-                        duration,
-                        if entry.submitted {
-                            "Submitted"
-                        } else {
-                            "Not Submitted"
-                        }
-                    );
-                }
-            }
+            // println!("Individual Entries by Date:");
+            // for (date, entries) in &group.entries {
+            //     println!("  Date: {}", date);
+            //     for entry in entries {
+            //         let duration = entry.end.map_or_else(
+            //             || "Ongoing".to_string(),
+            //             |end| format!("{} minutes", (end - entry.start).num_minutes()),
+            //         );
+            //         let local_time = entry.start.with_timezone(&Local);
+            //         println!(
+            //             "    - {} ({}) [{}]",
+            //             local_time.format("%H:%M"),
+            //             duration,
+            //             if entry.submitted {
+            //                 "Submitted"
+            //             } else {
+            //                 "Not Submitted"
+            //             }
+            //         );
+            //     }
+            // }
         }
     }
 
