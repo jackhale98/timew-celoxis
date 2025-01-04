@@ -197,7 +197,9 @@ impl CeloxisData {
                 true
             };
 
-            let tasks = self.api.get_tasks(&project.id, force_refresh)?;
+            let mut tasks = self.api.get_tasks(&project.id, force_refresh)?;
+
+            tasks.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
             let task_options: Vec<String> = tasks
                 .iter()
