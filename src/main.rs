@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::error::Error;
-use std::collections::HashMap;
-use chrono::{DateTime, Utc, NaiveDate, NaiveDateTime, Local, TimeZone};
-use inquire::{Select, Text, Confirm, MultiSelect};
-use inquire::DateSelect;
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use directories::BaseDirs;
 use inquire::list_option::ListOption;
 use inquire::validator::Validation;
-use directories::BaseDirs;
+use inquire::DateSelect;
+use inquire::{Confirm, MultiSelect, Select, Text};
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 mod celoxis;
 use celoxis::{CeloxisApi, CeloxisProject, CeloxisTask, CeloxisTimeEntry};
@@ -22,7 +22,6 @@ struct TimeEntry {
     submitted: bool,
     celoxis_id: Option<String>,
 }
-
 
 impl TimeEntry {
     fn from_timewarrior(line: &str, entry_id: String) -> Result<Self, Box<dyn Error>> {
@@ -73,13 +72,13 @@ impl TimeEntry {
                             tags.push(current_tag.clone());
                             current_tag.clear();
                         }
-                    },
+                    }
                     ' ' if !in_quotes => {
                         if !current_tag.is_empty() {
                             tags.push(current_tag.clone());
                             current_tag.clear();
                         }
-                    },
+                    }
                     _ => current_tag.push(c),
                 }
             }
@@ -114,7 +113,7 @@ struct DateRange {
 #[derive(Debug, Clone)]
 struct GroupedEntry {
     tags: Vec<String>,
-    total_duration: HashMap<NaiveDate, i64>,  // Duration in minutes per day
+    total_duration: HashMap<NaiveDate, i64>, // Duration in minutes per day
     entries: HashMap<NaiveDate, Vec<TimeEntry>>,
     all_submitted: bool,
 }
@@ -166,15 +165,21 @@ impl CeloxisData {
             projects
         };
 
-        let project_options: Vec<String> = projects.iter()
+        let project_options: Vec<String> = projects
+            .iter()
             .map(|p| format!("{} - {}", p.id, p.name))
             .collect();
 
         if let Some(selection) = Select::new(
             "Select project to associate time entries with:",
-            project_options.clone()
-        ).prompt_skippable()? {
-            let idx = project_options.iter().position(|x| x == &selection).unwrap();
+            project_options.clone(),
+        )
+        .prompt_skippable()?
+        {
+            let idx = project_options
+                .iter()
+                .position(|x| x == &selection)
+                .unwrap();
             self.selected_project = Some(projects[idx].clone());
         }
 
@@ -193,21 +198,20 @@ impl CeloxisData {
 
             let tasks = self.api.get_tasks(&project.id, force_refresh)?;
 
-            let task_options: Vec<String> = tasks.iter()
+            let task_options: Vec<String> = tasks
+                .iter()
                 .map(|t| format!("{} - {}", t.id, t.name))
                 .collect();
 
-            if let Ok(selections) = MultiSelect::new(
-                "Select tasks to associate time entries with:",
-                task_options.clone()
-            ).prompt() {
-                self.selected_tasks = selections.iter()
-                    .filter_map(|selection| {
-                        let idx = task_options.iter()
-                            .position(|x| x == selection)?;
-                        Some(tasks[idx].clone())
-                    })
-                    .collect();
+            // Changed from MultiSelect to Select
+            if let Ok(selection) = Select::new(
+                "Select task to associate time entries with:",
+                task_options.clone(),
+            )
+            .prompt()
+            {
+                let idx = task_options.iter().position(|x| x == &selection).unwrap();
+                self.selected_tasks = vec![tasks[idx].clone()];
             }
         }
 
@@ -220,10 +224,7 @@ impl TimeData {
         let data_dir = Self::detect_timewarrior_dir()?;
         let entries = Self::read_time_entries(&data_dir)?;
 
-        Ok(TimeData {
-            entries,
-            data_dir,
-        })
+        Ok(TimeData { entries, data_dir })
     }
 
     fn detect_timewarrior_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -271,10 +272,13 @@ impl TimeData {
             let entry = entry?;
             let path = entry.path();
 
-            if !path.is_file() ||
-               path.extension().and_then(|s| s.to_str()) != Some("data") ||
-               matches!(path.file_name().and_then(|s| s.to_str()),
-                       Some("tags.data") | Some("undo.data") | Some("backlog.data")) {
+            if !path.is_file()
+                || path.extension().and_then(|s| s.to_str()) != Some("data")
+                || matches!(
+                    path.file_name().and_then(|s| s.to_str()),
+                    Some("tags.data") | Some("undo.data") | Some("backlog.data")
+                )
+            {
                 continue;
             }
 
@@ -288,14 +292,18 @@ impl TimeData {
 
                 // println!("Parsing line: {}", line);
 
-                let entry_id = format!("{}-{}",
-                    path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown"),
-                    line_num);
+                let entry_id = format!(
+                    "{}-{}",
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown"),
+                    line_num
+                );
 
                 match TimeEntry::from_timewarrior(line, entry_id) {
                     Ok(entry) => {
                         entries.push(entry);
-                    },
+                    }
                     Err(e) => {
                         println!("Error parsing line {}: {}", line_num + 1, e);
                         println!("Problematic line content: {}", line);
@@ -336,20 +344,23 @@ impl TimeData {
 
             let entry_date = Self::to_local_date(entry.start);
 
-            groups.entry(sorted_tags)
+            groups
+                .entry(sorted_tags)
                 .or_insert_with(HashMap::new)
                 .entry(entry_date)
                 .or_insert_with(Vec::new)
                 .push(entry);
         }
 
-        groups.into_iter()
+        groups
+            .into_iter()
             .map(|(tags, date_entries_map)| {
                 let mut total_duration = HashMap::new();
                 let mut entries = HashMap::new();
 
                 for (date, entries_vec) in date_entries_map.iter() {
-                    let duration = entries_vec.iter()
+                    let duration = entries_vec
+                        .iter()
                         .map(|entry| {
                             let end = entry.end.unwrap_or_else(|| Utc::now());
                             (end - entry.start).num_minutes()
@@ -364,7 +375,8 @@ impl TimeData {
                     tags,
                     total_duration,
                     entries,
-                    all_submitted: date_entries_map.values()
+                    all_submitted: date_entries_map
+                        .values()
                         .all(|entries| entries.iter().all(|e| e.submitted)),
                 }
             })
@@ -372,8 +384,7 @@ impl TimeData {
     }
 
     fn prompt_date_range() -> Result<DateRange, Box<dyn Error>> {
-        let start_date = DateSelect::new("Select start date:")
-            .prompt()?;
+        let start_date = DateSelect::new("Select start date:").prompt()?;
 
         let end_date = DateSelect::new("Select end date:")
             .with_min_date(start_date)
@@ -385,138 +396,174 @@ impl TimeData {
         })
     }
 
-fn display_grouped_entries(grouped_entries: &[GroupedEntry]) {
-    for (idx, group) in grouped_entries.iter().enumerate() {
-        println!("\nGroup {}", idx + 1);
+    fn display_grouped_entries(grouped_entries: &[GroupedEntry]) {
+        for (idx, group) in grouped_entries.iter().enumerate() {
+            println!("\nGroup {}", idx + 1);
 
-        // Extract description and project from tags if available
-        let (description, project) = group.tags.iter().fold((None, None), |(desc, proj), tag| {
-            if tag.starts_with("description:") {
-                (Some(tag.trim_start_matches("description:")), proj)
-            } else if tag.starts_with("project:") {
-                (desc, Some(tag.trim_start_matches("project:")))
-            } else {
-                (desc, proj)
-            }
-        });
+            // Extract description and project from tags if available
+            let (description, project) =
+                group.tags.iter().fold((None, None), |(desc, proj), tag| {
+                    if tag.starts_with("description:") {
+                        (Some(tag.trim_start_matches("description:")), proj)
+                    } else if tag.starts_with("project:") {
+                        (desc, Some(tag.trim_start_matches("project:")))
+                    } else {
+                        (desc, proj)
+                    }
+                });
 
-        // Display tags based on available information
-        match (description, project) {
-            (Some(desc), Some(proj)) => println!("Description: {} (Project: {})", desc.trim(), proj.trim()),
-            (Some(desc), None) => println!("Description: {}", desc.trim()),
-            (None, Some(proj)) => println!("Project: {}", proj.trim()),
-            (None, None) => println!("Tags: {:?}", group.tags),
-        }
-
-        println!("Duration by date:");
-        for (date, duration) in &group.total_duration {
-            println!("  {} - {} hours {} minutes",
-                date,
-                duration / 60,
-                duration % 60);
-        }
-
-        println!("Submission Status: {}",
-            if group.all_submitted { "All Submitted" } else { "Not Fully Submitted" });
-
-        println!("Individual Entries by Date:");
-        for (date, entries) in &group.entries {
-            println!("  Date: {}", date);
-            for entry in entries {
-                let duration = entry.end.map_or_else(
-                    || "Ongoing".to_string(),
-                    |end| format!("{} minutes", (end - entry.start).num_minutes())
-                );
-                let local_time = entry.start.with_timezone(&Local);
-                println!("    - {} ({}) [{}]",
-                    local_time.format("%H:%M"),
-                    duration,
-                    if entry.submitted { "Submitted" } else { "Not Submitted" });
-            }
-        }
-    }
-}
-
-fn select_multiple_groups(grouped_entries: &[GroupedEntry]) -> Result<Vec<&GroupedEntry>, Box<dyn Error>> {
-    if grouped_entries.is_empty() {
-        println!("No grouped entries found.");
-        return Ok(Vec::new());
-    }
-
-    let options: Vec<String> = grouped_entries.iter().enumerate()
-        .map(|(idx, group)| {
-            let total_hours: f64 = group.total_duration.values().sum::<i64>() as f64 / 60.0;
-
-            // Extract description and project from tags
-            let (description, project) = group.tags.iter().fold((None, None), |(desc, proj), tag| {
-                if tag.starts_with("description:") {
-                    (Some(tag.trim_start_matches("description:")), proj)
-                } else if tag.starts_with("project:") {
-                    (desc, Some(tag.trim_start_matches("project:")))
-                } else {
-                    (desc, proj)
+            // Display tags based on available information
+            match (description, project) {
+                (Some(desc), Some(proj)) => {
+                    println!("Description: {} (Project: {})", desc.trim(), proj.trim())
                 }
-            });
+                (Some(desc), None) => println!("Description: {}", desc.trim()),
+                (None, Some(proj)) => println!("Project: {}", proj.trim()),
+                (None, None) => println!("Tags: {:?}", group.tags),
+            }
 
-            // Format display string based on available information
-            let display_info = match (description, project) {
-                (Some(desc), Some(proj)) => format!("{} (Project: {})", desc.trim(), proj.trim()),
-                (Some(desc), None) => desc.trim().to_string(),
-                (None, Some(proj)) => format!("Project: {}", proj.trim()),
-                (None, None) => format!("Tags: {:?}", group.tags),
-            };
+            println!("Duration by date:");
+            for (date, duration) in &group.total_duration {
+                println!(
+                    "  {} - {} hours {} minutes",
+                    date,
+                    duration / 60,
+                    duration % 60
+                );
+            }
 
-            format!(
-                "Group {} - {} - Total: {:.2}h {}",
-                idx + 1,
-                display_info,
-                total_hours,
-                if group.all_submitted { "[Submitted]" } else { "" }
-            )
-        })
-        .collect();
+            println!(
+                "Submission Status: {}",
+                if group.all_submitted {
+                    "All Submitted"
+                } else {
+                    "Not Fully Submitted"
+                }
+            );
 
-    let selections = MultiSelect::new(
-        "Select groups to process (Space to select, Enter to confirm):",
-        options.clone()  // Clone here so we can use options later
-    )
-    .with_validator(|selections: &[ListOption<&String>]| {
-        if selections.is_empty() {
-            Ok(Validation::Invalid("Please select at least one group".into()))
-        } else {
-            Ok(Validation::Valid)
+            println!("Individual Entries by Date:");
+            for (date, entries) in &group.entries {
+                println!("  Date: {}", date);
+                for entry in entries {
+                    let duration = entry.end.map_or_else(
+                        || "Ongoing".to_string(),
+                        |end| format!("{} minutes", (end - entry.start).num_minutes()),
+                    );
+                    let local_time = entry.start.with_timezone(&Local);
+                    println!(
+                        "    - {} ({}) [{}]",
+                        local_time.format("%H:%M"),
+                        duration,
+                        if entry.submitted {
+                            "Submitted"
+                        } else {
+                            "Not Submitted"
+                        }
+                    );
+                }
+            }
         }
-    })
-    .prompt()?;
+    }
 
-    Ok(selections.iter()
-        .filter_map(|selection| {
-            let idx = options.iter().position(|x| x == selection)?;
-            Some(&grouped_entries[idx])
+    fn select_multiple_groups(
+        grouped_entries: &[GroupedEntry],
+    ) -> Result<Vec<&GroupedEntry>, Box<dyn Error>> {
+        if grouped_entries.is_empty() {
+            println!("No grouped entries found.");
+            return Ok(Vec::new());
+        }
+
+        let options: Vec<String> = grouped_entries
+            .iter()
+            .enumerate()
+            .map(|(idx, group)| {
+                let total_hours: f64 = group.total_duration.values().sum::<i64>() as f64 / 60.0;
+
+                // Extract description and project from tags
+                let (description, project) =
+                    group.tags.iter().fold((None, None), |(desc, proj), tag| {
+                        if tag.starts_with("description:") {
+                            (Some(tag.trim_start_matches("description:")), proj)
+                        } else if tag.starts_with("project:") {
+                            (desc, Some(tag.trim_start_matches("project:")))
+                        } else {
+                            (desc, proj)
+                        }
+                    });
+
+                // Format display string based on available information
+                let display_info = match (description, project) {
+                    (Some(desc), Some(proj)) => {
+                        format!("{} (Project: {})", desc.trim(), proj.trim())
+                    }
+                    (Some(desc), None) => desc.trim().to_string(),
+                    (None, Some(proj)) => format!("Project: {}", proj.trim()),
+                    (None, None) => format!("Tags: {:?}", group.tags),
+                };
+
+                format!(
+                    "Group {} - {} - Total: {:.2}h {}",
+                    idx + 1,
+                    display_info,
+                    total_hours,
+                    if group.all_submitted {
+                        "[Submitted]"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+
+        let selections = MultiSelect::new(
+            "Select groups to process (Space to select, Enter to confirm):",
+            options.clone(), // Clone here so we can use options later
+        )
+        .with_validator(|selections: &[ListOption<&String>]| {
+            if selections.is_empty() {
+                Ok(Validation::Invalid(
+                    "Please select at least one group".into(),
+                ))
+            } else {
+                Ok(Validation::Valid)
+            }
         })
-        .collect())
-}
+        .prompt()?;
 
-fn process_selected_groups(groups: Vec<&GroupedEntry>) -> Result<Vec<GroupedEntry>, Box<dyn Error>> {
-    if groups.is_empty() {
-        return Err("No groups selected".into());
+        Ok(selections
+            .iter()
+            .filter_map(|selection| {
+                let idx = options.iter().position(|x| x == selection)?;
+                Some(&grouped_entries[idx])
+            })
+            .collect())
     }
 
-    let total_minutes: i64 = groups.iter()
-        .flat_map(|group| group.total_duration.values())
-        .sum();
+    fn process_selected_groups(
+        groups: Vec<&GroupedEntry>,
+    ) -> Result<Vec<GroupedEntry>, Box<dyn Error>> {
+        if groups.is_empty() {
+            return Err("No groups selected".into());
+        }
 
-    println!("\nGrouping {} sets of entries", groups.len());
-    println!("Total combined duration: {:.2} hours",
-        total_minutes as f64 / 60.0);
+        let total_minutes: i64 = groups
+            .iter()
+            .flat_map(|group| group.total_duration.values())
+            .sum();
 
-    println!("Including entries with these tags:");
-    for group in &groups {
-        println!("  - {:?}", group.tags);
+        println!("\nGrouping {} sets of entries", groups.len());
+        println!(
+            "Total combined duration: {:.2} hours",
+            total_minutes as f64 / 60.0
+        );
+
+        println!("Including entries with these tags:");
+        for group in &groups {
+            println!("  - {:?}", group.tags);
+        }
+
+        Ok(groups.into_iter().cloned().collect())
     }
-
-    Ok(groups.into_iter().cloned().collect())
-}
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -567,18 +614,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             let task = if celoxis.selected_tasks.len() == 1 {
                 celoxis.selected_tasks[0].clone()
             } else {
-                let task_options: Vec<String> = celoxis.selected_tasks.iter()
+                let task_options: Vec<String> = celoxis
+                    .selected_tasks
+                    .iter()
                     .map(|t| format!("{} - {}", t.id, t.name))
                     .collect();
 
-                let selected = Select::new(
-                    "Select the task for these entries:",
-                    task_options.clone()
-                ).prompt()?;
+                let selected =
+                    Select::new("Select the task for these entries:", task_options.clone())
+                        .prompt()?;
 
-                let idx = task_options.iter()
-                    .position(|x| x == &selected)
-                    .unwrap();
+                let idx = task_options.iter().position(|x| x == &selected).unwrap();
                 celoxis.selected_tasks[idx].clone()
             };
 
@@ -614,9 +660,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             assignments.push(assignment);
 
             // Collect the tags we need to remove
-            let tags_to_remove: Vec<_> = selected_groups.iter()
-                .map(|g| g.tags.clone())
-                .collect();
+            let tags_to_remove: Vec<_> = selected_groups.iter().map(|g| g.tags.clone()).collect();
 
             // Remove the processed groups
             grouped_entries.retain(|group| !tags_to_remove.contains(&group.tags));
@@ -638,17 +682,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("\nReady to process {} task assignments", assignments.len());
         println!("\nAssignments to be processed:");
         for assignment in &assignments {
-            println!("\nProject: {} (ID: {})",
-                assignment.celoxis_project.name,
-                assignment.celoxis_project.id);
-            println!("Task: {} (ID: {})",
-                assignment.celoxis_task.name,
-                assignment.celoxis_task.id);
+            println!(
+                "\nProject: {} (ID: {})",
+                assignment.celoxis_project.name, assignment.celoxis_project.id
+            );
+            println!(
+                "Task: {} (ID: {})",
+                assignment.celoxis_task.name, assignment.celoxis_task.id
+            );
             println!("Duration by date:");
             for (date, duration) in &assignment.total_duration {
-                println!("  {} - {:.2} hours",
-                    date,
-                    *duration as f64 / 60.0);
+                println!("  {} - {:.2} hours", date, *duration as f64 / 60.0);
             }
             println!("Summary: {}", assignment.summary);
             println!("Groups:");
@@ -661,33 +705,34 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_default(true)
             .prompt()?;
 
-if confirm_submit {
-    let mut all_entries = Vec::new();
+        if confirm_submit {
+            let mut all_entries = Vec::new();
 
-    // Collect all entries first
-    for assignment in &assignments {
-        println!("\nPreparing entries for project: {} (Task: {})",
-            assignment.celoxis_project.name,
-            assignment.celoxis_task.name);
+            // Collect all entries first
+            for assignment in &assignments {
+                println!(
+                    "\nPreparing entries for project: {} (Task: {})",
+                    assignment.celoxis_project.name, assignment.celoxis_task.name
+                );
 
-        let celoxis_entries = assignment.to_celoxis_entries();
-        for entry in &celoxis_entries {
-            println!("  {} - {:.2} hours - {}",
-                entry.date,
-                entry.hours,
-                entry.comments);
+                let celoxis_entries = assignment.to_celoxis_entries();
+                for entry in &celoxis_entries {
+                    println!(
+                        "  {} - {:.2} hours - {}",
+                        entry.date, entry.hours, entry.comments
+                    );
+                }
+                all_entries.extend(celoxis_entries);
+            }
+
+            println!("\nSubmitting {} total time entries...", all_entries.len());
+            match celoxis.api.submit_time_entries(all_entries) {
+                Ok(_) => println!("Successfully submitted all entries"),
+                Err(e) => println!("Error submitting entries: {}", e),
+            }
+        } else {
+            println!("Submission cancelled.");
         }
-        all_entries.extend(celoxis_entries);
-    }
-
-    println!("\nSubmitting {} total time entries...", all_entries.len());
-    match celoxis.api.submit_time_entries(all_entries) {
-        Ok(_) => println!("Successfully submitted all entries"),
-        Err(e) => println!("Error submitting entries: {}", e),
-    }
-} else {
-    println!("Submission cancelled.");
-}
     }
 
     Ok(())
@@ -698,7 +743,7 @@ impl TaskAssignment {
         let mut celoxis_entries = Vec::new();
 
         for (date, duration) in &self.total_duration {
-            let hours = ((*duration as f64 / 60.0) * 100.0).round() / 100.0;  // Round to 2 decimal places
+            let hours = ((*duration as f64 / 60.0) * 100.0).round() / 100.0; // Round to 2 decimal places
 
             celoxis_entries.push(CeloxisTimeEntry {
                 date: date.format("%Y-%m-%d").to_string(),

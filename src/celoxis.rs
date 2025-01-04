@@ -1,13 +1,13 @@
+use chrono::{DateTime, Utc};
+use directories::BaseDirs;
+use inquire::{self, validator::Validation};
+use reqwest::blocking::Client;
+use reqwest::header;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use reqwest::blocking::Client;
-use reqwest::header;
-use directories::BaseDirs;
-use inquire::{self, validator::Validation};
 
 const BASE_URL: &str = "https://app.celoxis.com/psa/api/v2";
 
@@ -147,17 +147,21 @@ impl CeloxisApi {
             header::HeaderValue::from_static("application/json"),
         );
 
-        let client = Client::builder()
-            .default_headers(headers)
-            .build()?;
+        let client = Client::builder().default_headers(headers).build()?;
 
         let cache_path = if let Some(base_dirs) = BaseDirs::new() {
             if Path::new(&format!("{}/.local/share/timewarrior", env!("HOME"))).exists() {
-                PathBuf::from(format!("{}/.local/share/timewarrior/celoxis_cache.json", env!("HOME")))
+                PathBuf::from(format!(
+                    "{}/.local/share/timewarrior/celoxis_cache.json",
+                    env!("HOME")
+                ))
             } else if Path::new(&format!("{}/.timewarrior", env!("HOME"))).exists() {
                 PathBuf::from(format!("{}/.timewarrior/celoxis_cache.json", env!("HOME")))
             } else {
-                PathBuf::from(format!("{}/.local/share/timewarrior/celoxis_cache.json", env!("HOME")))
+                PathBuf::from(format!(
+                    "{}/.local/share/timewarrior/celoxis_cache.json",
+                    env!("HOME")
+                ))
             }
         } else {
             PathBuf::from("celoxis_cache.json")
@@ -195,15 +199,15 @@ impl CeloxisApi {
             if let Some(parent) = self.cache_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(
-                &self.cache_path,
-                serde_json::to_string_pretty(cache)?,
-            )?;
+            fs::write(&self.cache_path, serde_json::to_string_pretty(cache)?)?;
         }
         Ok(())
     }
 
-    pub fn get_projects(&mut self, force_refresh: bool) -> Result<Vec<CeloxisProject>, Box<dyn Error>> {
+    pub fn get_projects(
+        &mut self,
+        force_refresh: bool,
+    ) -> Result<Vec<CeloxisProject>, Box<dyn Error>> {
         if !force_refresh {
             if let Some(cache) = &self.cache {
                 return Ok(cache.projects.values().cloned().collect());
@@ -211,7 +215,8 @@ impl CeloxisApi {
         }
 
         let params = [("filter", "{state : Active}")];
-        let response: CeloxisResponse<CeloxisProject> = self.client
+        let response: CeloxisResponse<CeloxisProject> = self
+            .client
             .get(&format!("{}/projects", BASE_URL))
             .query(&params)
             .send()?
@@ -229,9 +234,11 @@ impl CeloxisApi {
         Ok(response.data)
     }
 
-    pub fn get_tasks(&mut self, project_id: &str, force_refresh: bool)
-        -> Result<Vec<CeloxisTask>, Box<dyn Error>>
-    {
+    pub fn get_tasks(
+        &mut self,
+        project_id: &str,
+        force_refresh: bool,
+    ) -> Result<Vec<CeloxisTask>, Box<dyn Error>> {
         if !force_refresh {
             if let Some(cache) = &self.cache {
                 if let Some(tasks) = cache.tasks.get(project_id) {
@@ -244,14 +251,17 @@ impl CeloxisApi {
         println!("Fetching tasks with filter: {}", filter_json);
 
         let params = [("filter", filter_json)];
-        let response: CeloxisResponse<CeloxisTask> = self.client
+        let response: CeloxisResponse<CeloxisTask> = self
+            .client
             .get(&format!("{}/tasks", BASE_URL))
             .query(&params)
             .send()?
             .json()?;
 
         if let Some(cache) = &mut self.cache {
-            cache.tasks.insert(project_id.to_string(), response.data.clone());
+            cache
+                .tasks
+                .insert(project_id.to_string(), response.data.clone());
             cache.last_updated = Utc::now();
             self.save_cache()?;
         }
@@ -267,13 +277,13 @@ impl CeloxisApi {
         self.cache.as_ref()?.tasks.get(project_id)
     }
 
-    pub fn submit_time_entries(&self, entries: Vec<CeloxisTimeEntry>) -> Result<(), Box<dyn Error>> {
+    pub fn submit_time_entries(
+        &self,
+        entries: Vec<CeloxisTimeEntry>,
+    ) -> Result<(), Box<dyn Error>> {
         let url = format!("{}/timeEntries", BASE_URL);
 
-        let response = self.client
-            .post(&url)
-            .json(&entries)
-            .send()?;
+        let response = self.client.post(&url).json(&entries).send()?;
 
         if !response.status().is_success() {
             let error_json = response.json::<serde_json::Value>()?;
