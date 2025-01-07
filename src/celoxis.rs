@@ -247,7 +247,7 @@ impl CeloxisApi {
             }
         }
 
-        let filter_json = format!("{{\"project.id\":\"{}\"}}", project_id);
+        let filter_json = format!("{{\"project.id\":\"{}\", \"isTimeAllowed\":\"t\"}}", project_id);
         println!("Fetching tasks with filter: {}", filter_json);
 
         let params = [("filter", filter_json)];
