@@ -4,6 +4,8 @@ use inquire::list_option::ListOption;
 use inquire::validator::Validation;
 use inquire::DateSelect;
 use inquire::{Confirm, MultiSelect, Select, Text};
+use serde::{Serialize, Deserialize};
+use std::process::Command;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -13,7 +15,7 @@ use regex::Regex;
 mod celoxis;
 use celoxis::{CeloxisApi, CeloxisProject, CeloxisTask, CeloxisTimeEntry};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TimeEntry {
     id: String,
     start: DateTime<Utc>,
@@ -225,8 +227,8 @@ impl CeloxisData {
 impl TimeData {
     fn new(date_range: &DateRange) -> Result<Self, Box<dyn Error>> {
         let data_dir = Self::detect_timewarrior_dir()?;
-        let entries = Self::read_time_entries(&data_dir, date_range)?;
-
+        let entries = Self::read_time_entries(date_range)?;
+        
         Ok(TimeData { entries, data_dir })
     }
     fn is_file_in_date_range(filename: &str, range: &DateRange) -> bool {
@@ -249,6 +251,14 @@ impl TimeData {
             }
         }
         false
+    }
+
+    fn format_timewarrior_date_start(date: NaiveDate) -> String {
+        date.format("%Y-%m-%d").to_string()
+    }
+
+    fn format_timewarrior_date_end(date: NaiveDate) -> String {
+        date.format("%Y-%m-%dT23:59:59").to_string()
     }
 
     fn detect_timewarrior_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -281,90 +291,114 @@ impl TimeData {
         }
     }
 
-    fn read_time_entries(data_dir: &Path, date_range: &DateRange) -> Result<Vec<TimeEntry>, Box<dyn Error>> {
-        let data_path = data_dir.join("data");
-        println!("Looking for data in: {:?}", data_path);
-
-        if !data_path.exists() {
-            println!("Data directory does not exist");
-            return Ok(Vec::new());
+    fn read_time_entries(date_range: &DateRange) -> Result<Vec<TimeEntry>, Box<dyn Error>> {
+        let start_str = Self::format_timewarrior_date_start(date_range.start);
+        let end_str = Self::format_timewarrior_date_end(date_range.end);
+        
+        println!("Fetching time entries from {} to {}", start_str, end_str);
+        
+        let output = Command::new("timew")
+            .args(&["export", "from", &start_str, "to", &end_str])
+            .output()?;
+    
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("TimeWarrior export failed: {}", error).into());
         }
-
-        let mut entries = Vec::new();
-
-        // Filter files based on date range
-        let dir_entries = fs::read_dir(&data_path)?;
-        for entry in dir_entries {
-            let entry = entry?;
-            let path = entry.path();
-
-            // Skip if not a file or not a .data file
-            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("data") {
-                continue;
-            }
-
-            // Skip special files
-            if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                if filename == "tags.data" || filename == "undo.data" || filename == "backlog.data" {
-                    continue;
+    
+        let json_str = String::from_utf8(output.stdout)?;
+        println!("Raw TimeWarrior output:\n{}", json_str); // Debug output
+    
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&json_str)?;
+        
+        let mut time_entries = Vec::new();
+        
+        for (idx, entry) in entries.into_iter().enumerate() {
+            let entry_obj = entry.as_object()
+                .ok_or("Invalid entry format")?;
+    
+            println!("Processing entry {}: {:?}", idx, entry_obj); // Debug output
+    
+            let start_str = entry_obj.get("start")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing start time")?;
+            
+            println!("Parsing start time: {}", start_str); // Debug output
+            
+            // Try multiple date formats
+            let start = match DateTime::parse_from_rfc3339(start_str) {
+                Ok(dt) => dt.with_timezone(&Utc),
+                Err(_) => {
+                    // Try alternative format that TimeWarrior might be using
+                    NaiveDateTime::parse_from_str(start_str, "%Y%m%dT%H%M%SZ")?
+                        .and_local_timezone(Utc)
+                        .earliest()
+                        .ok_or("Could not determine timezone")?
                 }
-
-                // Check if file is within date range before processing
-                if !Self::is_file_in_date_range(filename, date_range) {
-                    println!("Skipping file outside date range: {}", filename);
-                    continue;
-                }
-
-                println!("Processing file in range: {}", filename);
-                let content = fs::read_to_string(&path)?;
-
-                for (line_num, line) in content.lines().enumerate() {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-
-                    let entry_id = format!(
-                        "{}-{}",
-                        path.file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("unknown"),
-                        line_num
-                    );
-
-                    match TimeEntry::from_timewarrior(line, entry_id.clone()) {
-                        Ok(entry) => {
-                            // Additional date range check for individual entries
-                            let entry_date = Self::to_local_date(entry.start);
-                            if entry_date >= date_range.start && entry_date <= date_range.end {
-                                entries.push(entry);
-                            }
+            };
+    
+            let end = match entry_obj.get("end") {
+                Some(end_val) => {
+                    let end_str = end_val.as_str()
+                        .ok_or("End time not a string")?;
+                    println!("Parsing end time: {}", end_str); // Debug output
+                    
+                    Some(match DateTime::parse_from_rfc3339(end_str) {
+                        Ok(dt) => dt.with_timezone(&Utc),
+                        Err(_) => {
+                            NaiveDateTime::parse_from_str(end_str, "%Y%m%dT%H%M%SZ")?
+                                .and_local_timezone(Utc)
+                                .earliest()
+                                .ok_or("Could not determine timezone")?
                         }
-                        Err(e) => {
-                            println!("Error parsing line {} in {}: {}", line_num + 1, filename, e);
-                        }
-                    }
-                }
-            }
+                    })
+                },
+                None => None
+            };
+    
+            // Rest of the processing...
+            let tags = entry_obj.get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect())
+                .unwrap_or_default();
+    
+            let annotation = entry_obj.get("annotation")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+    
+            time_entries.push(TimeEntry {
+                id: format!("export-{}", idx),
+                start,
+                end,
+                tags,
+                annotation,
+                submitted: false,
+                celoxis_id: None,
+            });
         }
-
-        entries.sort_by(|a, b| a.start.cmp(&b.start));
-        println!("Found {} entries within date range", entries.len());
-
-        Ok(entries)
+    
+        Ok(time_entries)
     }
 
     fn to_local_date(utc: DateTime<Utc>) -> NaiveDate {
         utc.with_timezone(&Local).naive_local().date()
     }
 
-    fn filter_by_date_range(&self, range: &DateRange) -> Vec<&TimeEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| {
-                let entry_date = Self::to_local_date(entry.start);
-                entry_date >= range.start && entry_date <= range.end
-            })
-            .collect()
+    fn filter_by_date_range(&mut self, range: &DateRange) -> Vec<&TimeEntry> {
+        // Load entries for the specified date range
+        match Self::read_time_entries(range) {
+            Ok(entries) => {
+                self.entries = entries;
+                self.entries.iter().collect()
+            },
+            Err(e) => {
+                eprintln!("Error reading time entries: {}", e);
+                Vec::new()
+            }
+        }
     }
 
     fn group_entries_by_tags(&self, entries: Vec<&TimeEntry>) -> Vec<GroupedEntry> {
@@ -466,37 +500,6 @@ impl TimeData {
                     duration % 60
                 );
             }
-
-            // println!(
-            //     "Submission Status: {}",
-            //     if group.all_submitted {
-            //         "All Submitted"
-            //     } else {
-            //         "Not Fully Submitted"
-            //     }
-            // );
-
-            // println!("Individual Entries by Date:");
-            // for (date, entries) in &group.entries {
-            //     println!("  Date: {}", date);
-            //     for entry in entries {
-            //         let duration = entry.end.map_or_else(
-            //             || "Ongoing".to_string(),
-            //             |end| format!("{} minutes", (end - entry.start).num_minutes()),
-            //         );
-            //         let local_time = entry.start.with_timezone(&Local);
-            //         println!(
-            //             "    - {} ({}) [{}]",
-            //             local_time.format("%H:%M"),
-            //             duration,
-            //             if entry.submitted {
-            //                 "Submitted"
-            //             } else {
-            //                 "Not Submitted"
-            //             }
-            //         );
-            //     }
-            // }
         }
     }
 
@@ -602,24 +605,16 @@ impl TimeData {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // First select date range
     let date_range = TimeData::prompt_date_range()?;
-
-    // Create TimeData with date range
     let time_data = TimeData::new(&date_range)?;
-    println!("Found {} time entries in selected date range", time_data.entries.len());
-
+    println!("Found {} time entries", time_data.entries.len());
     let mut celoxis = CeloxisData::new()?;
 
     // Get user preferences once at start
     let user_prefs = celoxis.api.ensure_user_prefs()?;
 
-    // Filter entries by date range
-    let filtered_entries = time_data.filter_by_date_range(&date_range);
-    println!("Found {} entries in date range", filtered_entries.len());
-
     // Group entries
-    let mut grouped_entries = time_data.group_entries_by_tags(filtered_entries);
+    let mut grouped_entries = time_data.group_entries_by_tags(time_data.entries.iter().collect());
     println!("Grouped into {} sets", grouped_entries.len());
 
     let mut assignments: Vec<TaskAssignment> = Vec::new();
