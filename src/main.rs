@@ -307,7 +307,7 @@ impl TimeData {
         }
     
         let json_str = String::from_utf8(output.stdout)?;
-        println!("Raw TimeWarrior output:\n{}", json_str); // Debug output
+        // println!("Raw TimeWarrior output:\n{}", json_str); // Debug output
     
         let entries: Vec<serde_json::Value> = serde_json::from_str(&json_str)?;
         
@@ -317,13 +317,13 @@ impl TimeData {
             let entry_obj = entry.as_object()
                 .ok_or("Invalid entry format")?;
     
-            println!("Processing entry {}: {:?}", idx, entry_obj); // Debug output
+            // println!("Processing entry {}: {:?}", idx, entry_obj); // Debug output
     
             let start_str = entry_obj.get("start")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing start time")?;
             
-            println!("Parsing start time: {}", start_str); // Debug output
+            //println!("Parsing start time: {}", start_str); // Debug output
             
             // Try multiple date formats
             let start = match DateTime::parse_from_rfc3339(start_str) {
@@ -341,7 +341,7 @@ impl TimeData {
                 Some(end_val) => {
                     let end_str = end_val.as_str()
                         .ok_or("End time not a string")?;
-                    println!("Parsing end time: {}", end_str); // Debug output
+                    //println!("Parsing end time: {}", end_str); // Debug output
                     
                     Some(match DateTime::parse_from_rfc3339(end_str) {
                         Ok(dt) => dt.with_timezone(&Utc),
@@ -467,7 +467,7 @@ impl TimeData {
 
     fn display_grouped_entries(grouped_entries: &[GroupedEntry]) {
         for (idx, group) in grouped_entries.iter().enumerate() {
-            println!("\nGroup {}", idx + 1);
+            //println!("\nGroup {}", idx + 1);
 
             // Extract description and project from tags if available
             let (description, project) =
@@ -482,24 +482,24 @@ impl TimeData {
                 });
 
             // Display tags based on available information
-            match (description, project) {
-                (Some(desc), Some(proj)) => {
-                    println!("Description: {} (Project: {})", desc.trim(), proj.trim())
-                }
-                (Some(desc), None) => println!("Description: {}", desc.trim()),
-                (None, Some(proj)) => println!("Project: {}", proj.trim()),
-                (None, None) => println!("Tags: {:?}", group.tags),
-            }
+            //match (description, project) {
+            //    (Some(desc), Some(proj)) => {
+            //        println!("Description: {} (Project: {})", desc.trim(), proj.trim())
+            //    }
+            //    (Some(desc), None) => println!("Description: {}", desc.trim()),
+            //    (None, Some(proj)) => println!("Project: {}", proj.trim()),
+            //    (None, None) => println!("Tags: {:?}", group.tags),
+            //}
 
             // println!("Duration by date:");
-            for (date, duration) in &group.total_duration {
-                println!(
-                    "  {} - {} hours {} minutes",
-                    date,
-                    duration / 60,
-                    duration % 60
-                );
-            }
+            //for (date, duration) in &group.total_duration {
+            //    println!(
+            //        "  {} - {} hours {} minutes",
+            //        date,
+            //        duration / 60,
+            //        duration % 60
+            //    );
+            //}
         }
     }
 
@@ -615,7 +615,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Group entries
     let mut grouped_entries = time_data.group_entries_by_tags(time_data.entries.iter().collect());
-    println!("Grouped into {} sets", grouped_entries.len());
+    //println!("Grouped into {} sets", grouped_entries.len());
 
     let mut assignments: Vec<TaskAssignment> = Vec::new();
 
