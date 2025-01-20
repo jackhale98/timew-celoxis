@@ -731,28 +731,56 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_default(false)
             .prompt()?
         {
-            for assignment in assignments.iter_mut() {
-                for group in assignment.groups.iter_mut() {
-                    if let Some(desc_tag) = group.tags.iter()
-                        .position(|tag| tag.starts_with("description:")) 
-                    {
-                        let current_desc = group.tags[desc_tag]
-                            .trim_start_matches("description:")
-                            .trim()
-                            .to_string();
-                            
-                        if let Ok(edit_this) = Confirm::new(
-                            &format!("Edit description: \"{}\"?", current_desc))
-                            .with_default(false)
+            // First collect all unique descriptions with their locations
+            let mut descriptions: Vec<(String, (usize, usize))> = assignments.iter()
+                .enumerate()
+                .flat_map(|(assign_idx, assignment)| {
+                    assignment.groups.iter().enumerate().map(move |(group_idx, group)| {
+                        // Try to find description tag first, fallback to first tag or default text
+                        let desc = group.tags.iter()
+                            .find(|tag| tag.starts_with("description:"))
+                            .map(|tag| tag.trim_start_matches("description:").trim().to_string())
+                            .or_else(|| group.tags.first().map(|t| t.clone()))
+                            .unwrap_or_else(|| "No description".to_string());
+                        
+                        (desc, (assign_idx, group_idx))
+                    })
+                })
+                .collect();
+
+            // Create options for multiselect with duration information
+            let desc_options: Vec<String> = descriptions.iter()
+                .map(|(desc, (assign_idx, group_idx))| {
+                    let group = &assignments[*assign_idx].groups[*group_idx];
+                    let total_hours: f64 = group.total_duration.values().sum();
+                    format!("{} ({:.2}h)", desc, total_hours)
+                })
+                .collect();
+
+            if let Ok(selections) = MultiSelect::new(
+                "Select descriptions to edit:",
+                desc_options.clone(),
+            ).prompt() {
+                // Process selected descriptions
+                for selected_desc in selections {
+                    if let Some(pos) = desc_options.iter().position(|d| d == &selected_desc) {
+                        let (orig_desc, (assign_idx, group_idx)) = &descriptions[pos];
+                        
+                        if let Ok(new_desc) = Text::new("Enter new description:")
+                            .with_default(orig_desc)
                             .prompt() 
                         {
-                            if edit_this {
-                                if let Ok(new_desc) = Text::new("Enter new description:")
-                                    .with_default(&current_desc)
-                                    .prompt() 
-                                {
-                                    group.tags[desc_tag] = format!("description:{}", new_desc);
-                                }
+                            let group = &mut assignments[*assign_idx].groups[*group_idx];
+                            
+                            // Find or create description tag
+                            if let Some(desc_tag_idx) = group.tags
+                                .iter()
+                                .position(|tag| tag.starts_with("description:")) 
+                            {
+                                group.tags[desc_tag_idx] = format!("description:{}", new_desc);
+                            } else {
+                                // If no description tag exists, add one
+                                group.tags.push(format!("description:{}", new_desc));
                             }
                         }
                     }
