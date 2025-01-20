@@ -105,6 +105,11 @@ impl TimeEntry {
             celoxis_id: None,
         })
     }
+    fn duration_in_hours(&self) -> f64 {
+        let end = self.end.unwrap_or_else(|| Utc::now());
+        let duration = end - self.start;
+        (duration.num_seconds() as f64) / 3600.0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +121,7 @@ struct DateRange {
 #[derive(Debug, Clone)]
 struct GroupedEntry {
     tags: Vec<String>,
-    total_duration: HashMap<NaiveDate, i64>, // Duration in minutes per day
+    total_duration: HashMap<NaiveDate, f64>, // Duration in minutes per day
     entries: HashMap<NaiveDate, Vec<TimeEntry>>,
     all_submitted: bool,
 }
@@ -124,10 +129,9 @@ struct GroupedEntry {
 #[derive(Debug)]
 struct TaskAssignment {
     groups: Vec<GroupedEntry>,
-    total_duration: HashMap<NaiveDate, i64>,
+    total_duration: HashMap<NaiveDate, f64>,
     celoxis_project: CeloxisProject,
     celoxis_task: CeloxisTask,
-    summary: String,
     time_code: String,
     user: String,
 }
@@ -403,16 +407,17 @@ impl TimeData {
 
     fn group_entries_by_tags(&self, entries: Vec<&TimeEntry>) -> Vec<GroupedEntry> {
         let mut groups: HashMap<Vec<String>, HashMap<NaiveDate, Vec<&TimeEntry>>> = HashMap::new();
-
+    
+        // Group entries by their tags and dates
         for entry in entries {
             let sorted_tags = {
                 let mut tags = entry.tags.clone();
                 tags.sort();
                 tags
             };
-
+    
             let entry_date = Self::to_local_date(entry.start);
-
+    
             groups
                 .entry(sorted_tags)
                 .or_insert_with(HashMap::new)
@@ -420,26 +425,28 @@ impl TimeData {
                 .or_insert_with(Vec::new)
                 .push(entry);
         }
-
+    
+        // Convert the grouped entries into GroupedEntry structs
         groups
             .into_iter()
             .map(|(tags, date_entries_map)| {
                 let mut total_duration = HashMap::new();
                 let mut entries = HashMap::new();
-
+    
                 for (date, entries_vec) in date_entries_map.iter() {
-                    let duration = entries_vec
+                    let duration: f64 = entries_vec
                         .iter()
                         .map(|entry| {
                             let end = entry.end.unwrap_or_else(|| Utc::now());
-                            (end - entry.start).num_minutes()
+                            // Calculate duration in hours directly
+                            (end - entry.start).num_seconds() as f64 / 3600.0
                         })
                         .sum();
-
+    
                     total_duration.insert(*date, duration);
                     entries.insert(*date, entries_vec.iter().map(|&e| e.clone()).collect());
                 }
-
+    
                 GroupedEntry {
                     tags,
                     total_duration,
@@ -506,16 +513,11 @@ impl TimeData {
     fn select_multiple_groups(
         grouped_entries: &[GroupedEntry],
     ) -> Result<Vec<&GroupedEntry>, Box<dyn Error>> {
-        if grouped_entries.is_empty() {
-            println!("No grouped entries found.");
-            return Ok(Vec::new());
-        }
-
         let options: Vec<String> = grouped_entries
             .iter()
             .enumerate()
             .map(|(idx, group)| {
-                let total_hours: f64 = group.total_duration.values().sum::<i64>() as f64 / 60.0;
+                let total_hours: f64 = group.total_duration.values().sum();
 
                 // Extract description and project from tags
                 let (description, project) =
@@ -529,11 +531,9 @@ impl TimeData {
                         }
                     });
 
-                // Format display string based on available information
+                // Format display string
                 let display_info = match (description, project) {
-                    (Some(desc), Some(proj)) => {
-                        format!("{} (Project: {})", desc.trim(), proj.trim())
-                    }
+                    (Some(desc), Some(proj)) => format!("{} (Project: {})", desc.trim(), proj.trim()),
                     (Some(desc), None) => desc.trim().to_string(),
                     (None, Some(proj)) => format!("Project: {}", proj.trim()),
                     (None, None) => format!("Tags: {:?}", group.tags),
@@ -544,11 +544,7 @@ impl TimeData {
                     idx + 1,
                     display_info,
                     total_hours,
-                    if group.all_submitted {
-                        "[Submitted]"
-                    } else {
-                        ""
-                    }
+                    if group.all_submitted { "[Submitted]" } else { "" }
                 )
             })
             .collect();
@@ -584,7 +580,7 @@ impl TimeData {
             return Err("No groups selected".into());
         }
 
-        let total_minutes: i64 = groups
+        let total_minutes: f64 = groups
             .iter()
             .flat_map(|group| group.total_duration.values())
             .sum();
@@ -660,21 +656,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
 
             // Get summary for the entries
-            let summary = Text::new("Enter work summary for these entries:")
-                .with_validator(|input: &str| {
-                    if input.trim().is_empty() {
-                        Ok(Validation::Invalid("Summary cannot be empty".into()))
-                    } else {
-                        Ok(Validation::Valid)
-                    }
-                })
-                .prompt()?;
+            //let summary = Text::new("Enter work summary for these entries:")
+            //    .with_validator(|input: &str| {
+            //        if input.trim().is_empty() {
+            //            Ok(Validation::Invalid("Summary cannot be empty".into()))
+            //        } else {
+            //            Ok(Validation::Valid)
+            //        }
+            //    })
+            //    .prompt()?;
 
             // Calculate total duration by date
             let mut total_duration = HashMap::new();
             for group in &processed_groups {
                 for (date, duration) in &group.total_duration {
-                    *total_duration.entry(*date).or_insert(0) += duration;
+                    *total_duration.entry(*date).or_insert(0.0) += duration;
                 }
             }
 
@@ -684,7 +680,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 total_duration,
                 celoxis_project: project,
                 celoxis_task: task,
-                summary,
                 time_code: user_prefs.time_code.clone(),
                 user: user_prefs.username.clone(),
             };
@@ -723,12 +718,45 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             println!("Duration by date:");
             for (date, duration) in &assignment.total_duration {
-                println!("  {} - {:.2} hours", date, *duration as f64 / 60.0);
+                println!("  {} - {:.2} hours", date, *duration);
             }
-            println!("Summary: {}", assignment.summary);
             println!("Groups:");
             for group in &assignment.groups {
                 println!("  - Tags: {:?}", group.tags);
+            }
+        }
+
+        // Add new description editing section here
+        if Confirm::new("Would you like to edit any task descriptions before submission?")
+            .with_default(false)
+            .prompt()?
+        {
+            for assignment in assignments.iter_mut() {
+                for group in assignment.groups.iter_mut() {
+                    if let Some(desc_tag) = group.tags.iter()
+                        .position(|tag| tag.starts_with("description:")) 
+                    {
+                        let current_desc = group.tags[desc_tag]
+                            .trim_start_matches("description:")
+                            .trim()
+                            .to_string();
+                            
+                        if let Ok(edit_this) = Confirm::new(
+                            &format!("Edit description: \"{}\"?", current_desc))
+                            .with_default(false)
+                            .prompt() 
+                        {
+                            if edit_this {
+                                if let Ok(new_desc) = Text::new("Enter new description:")
+                                    .with_default(&current_desc)
+                                    .prompt() 
+                                {
+                                    group.tags[desc_tag] = format!("description:{}", new_desc);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -773,17 +801,33 @@ impl TaskAssignment {
     fn to_celoxis_entries(&self) -> Vec<CeloxisTimeEntry> {
         let mut celoxis_entries = Vec::new();
 
-        for (date, duration) in &self.total_duration {
-            let hours = ((*duration as f64 / 60.0) * 100.0).round() / 100.0; // Round to 2 decimal places
+        for (date, total_hours) in &self.total_duration {
+            // Collect descriptions from each group for this date
+            let comments: String = self.groups.iter()
+                .filter_map(|group| {
+                    if let Some(group_hours) = group.total_duration.get(date) {
+                        // Get description from the group's tags
+                        let desc = group.tags.iter()
+                            .find(|tag| tag.starts_with("description:"))
+                            .map(|tag| tag.trim_start_matches("description:").trim())
+                            .unwrap_or("No description");
+                        
+                        Some(format!("{} ({:.2}h)", desc, group_hours))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
 
             celoxis_entries.push(CeloxisTimeEntry {
                 date: date.format("%Y-%m-%d").to_string(),
-                hours,
+                hours: (*total_hours * 100.0).round() / 100.0,
                 time_code: self.time_code.clone(),
                 user: self.user.clone(),
                 task: self.celoxis_task.id.clone(),
                 state: 0,
-                comments: self.summary.clone(),
+                comments,
             });
         }
 
